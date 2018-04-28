@@ -52,8 +52,8 @@ GetOptions(	'p|path=s' 		=> \$dirPath,
 				's|size=s',		=> \$fileSize,
 				'bs:s'			=> \$blockSize,
 				't|threads=i'    => \$numThreads,
-				'fprefix'		=> \$filePrefix,
-				'dprefix'		=> \$dirPrefix,
+				'fprefix=s'		=> \$filePrefix,
+				'dprefix=s'		=> \$dirPrefix,
 				'o|order=i'		=> \$order,
 				'd|depth=i'		=> \$depth,
 				'h|help'			=> sub { Help()  } ) or die "Error in command line arguments \n" ;
@@ -86,8 +86,8 @@ $threadExitCond = $numFiles ;
 if (!defined($blockSize) ) {
 	$blockSize = $BLOCKSIZE ; # Default block size of 256k		
 }
-elsif ( $blockSize =~ /^(\d+)(k|kb)$/i ) {
-	$blockSize = $1 ;
+elsif ( $blockSize =~ /^(\d+)(k)$/i ) {
+	$blockSize = $1.$2 ;
 }
 else {
 	die "Invalid blocksize [ $blockSize ] , should be in kb's only ...\n"
@@ -130,7 +130,7 @@ if (defined($fileSize)) {
 	else {
 		die "Unrecognized fileSize [ $fileSize ] \n";
 	}
-	$blockSize = $blockSize."k" ;
+	$blockSize = $blockSize ;
 }
 else {
 	$fileSize = $FILESIZE ; # Default file size 16MB files 
@@ -156,32 +156,32 @@ else {
 	$maxDirs = $order**$depth-1 ;
 }
 
-createDirTree($depth,$order,$maxDirs);
+createDirTree($maxDirs,$dirPrefix);
 
-my $fileCreateThread = threads->create('createFilesDirTree',$dirPath,$depth,$order,$numFiles,$maxDirs,$dirPrefix,$filePrefix);
+my $fileCreateThread = threads->create('createFilesDirTree',$maxDirs,$filePrefix,$dirPrefix);
 
-$fileCreateThread->join();
-
-consumeFilesDirTree($blockSize,$numBlocks);
+consumeFilesDirTree($numBlocks);
 
 #foreach my $file ( @ALLFILES ) {
 #	print "FILE :: $file \n" ;
 #}
 
+$fileCreateThread->join();
+
 sub createDirTree() {
-	my ($d,$o,$maxDirs) = @_;
+	my ($maxDirs,$dprefix) = @_;
 
 	print "maxdirs :: $maxDirs \n";
-	if ( $d == 1 ) {
+	if ( $depth == 1 ) {
 		my $createDir;
-		for (my $j=1; $j<=$o; $j++ ) {
-			$createDir = File::Spec->catdir($dirPath,$dirPrefix."$j");
-			make_path($createDir) or die "Dir [ $createDir ] creation failed $! ..\n";
+		for (my $j=1; $j<=$order; $j++ ) {
+			$createDir = File::Spec->catdir($dirPath,$dprefix."$j");
+			make_path($createDir) or die "Dir [ $createDir ] creation failed $!";
 		}
 		
 	}
 	else {
-		my $th = threads->create('createDirSubTree',$dirPath,0,$o,$maxDirs) ;
+		my $th = threads->create('createDirSubTree',$dirPath,0,$maxDirs,$dprefix) ;
 		if(!defined($th)) {
 			die "Thread create failed for dir tree create  $! \n";
 		}
@@ -192,7 +192,7 @@ sub createDirTree() {
 }
 
 sub createDirSubTree() {
-	my ($dir,$parent,$order,$maxdirs) = @_ ;
+	my ($dir,$parent,$maxdirs,$dprefix) = @_ ;
 	my $createDir ;
 	my $index;	
 
@@ -201,19 +201,19 @@ sub createDirSubTree() {
 		if($index > $maxdirs ) {
 			return ;
 		}
-		$createDir = File::Spec->catfile($dir,$dirPrefix.$index);
+		$createDir = File::Spec->catfile($dir,$dprefix.$index);
 		make_path($createDir) or die "Dir [ $createDir ] failed :$! \n";
-		createDirSubTree($createDir,$index,$order,$maxdirs);
+		createDirSubTree($createDir,$index,$maxdirs,$dprefix);
 		# system('dd if=/dev/urandom of=$filePath bs=$blockSize count=$numBlocks') or warn "File creation failed for [ $filePath ] ..";
 	}
 }
 
 sub consumeFilesDirTree() {
-	my ($blk_size,$num_blocks) = @_;
+	my ($num_blocks) = @_;
 	my @ths ;
 	print "numThreads :: $numThreads \n" ;
 	for (my $j=1; $j <= $numThreads; $j++) {
-		my $th = threads->create('createFile',$threadExitCond,\@ALLFILES,$blk_size,$num_blocks);
+		my $th = threads->create('createFile',$num_blocks);
 		sleep 3;
 		print "TID :: ",$th->tid()," \n";
 		push @ths, $th;		
@@ -226,13 +226,13 @@ sub consumeFilesDirTree() {
 }
 
 sub createFilesDirTree() {
-	my ($basedir,$depth, $order, $numFiles, $maxDirs, $d_prefix, $f_prefix) = @_ ;
+	my ($maxDirs,$fprefix,$dprefix) = @_ ;
 
 	my $dirCounter = 1;
 	my $currFilePath ;
 
 	for (my $i=1; $i<=$numFiles; $i++) {
-		$currFilePath = File::Spec->catfile(File::Spec->catdir($basedir,populateDirPath($dirCounter,$order, $d_prefix)),$f_prefix.$i);
+		$currFilePath = File::Spec->catfile(File::Spec->catdir($dirPath,populateDirPath($dirCounter,$dprefix)),$fprefix.$i);
 		push @ALLFILES, $currFilePath;		
 		if ( $dirCounter == $maxDirs ) {
 			$dirCounter = 1;
@@ -244,27 +244,32 @@ sub createFilesDirTree() {
 
 sub populateDirPath() {
 	my $temp = "";
-	my ($dirIndex,$order,$prefix)  = @_;
+	my ($dirIndex)  = @_;
 
 	my $p;
 
 	while ( $dirIndex > 0 ) {
 		$p = floor(($dirIndex-1)/$order) ;
-		$temp = File::Spec->catdir($prefix.$dirIndex,$temp);
+		$temp = File::Spec->catdir($dirPrefix.$dirIndex,$temp);
 		$dirIndex = $p;
 	}
 	return $temp;
 }
 
 sub createFile() {
-	share (my $fileArrayRef);
-	my ($exitCond,$fileArrayRef,$blk_size,$num_blocks) = @_ ;
+	
+	my ($num_blocks) = @_ ;
 	my $filepath ;
-	while ( @$fileArrayRef !=0 && $exitCond > 0 ) {
-		$filepath = shift @$fileArrayRef;
-		$exitCond--;
+
+	while ( @ALLFILES > 0 || $threadExitCond > 0 ) {
+		#lock $fileArrayRef ;
+		$filepath = shift @ALLFILES;
+		#lock $exitCond;
+		$threadExitCond--;
 		my $tid = threads->self()->tid();
-		print "Creating file :: [ $filepath ] Thread id :: [ $tid ]\n";
-		system("dd if=/dev/urandom of=$filepath bs=$blk_size count=$num_blocks") == 0 or warn "File creation failed for [ $filepath ] ..";
+		if(defined($filepath)) {
+			print "Creating file :: [ $filepath ] bs :: $blockSize nb :: $num_blocks  Thread id :: [ $tid ]\n";
+			system("dd if=/dev/urandom of=$filepath bs=$blockSize count=$num_blocks") == 0 or warn "File creation failed for [ $filepath ] ..";
+		}
 	}
 }
