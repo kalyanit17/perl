@@ -237,5 +237,31 @@ sub readNwrite() {
 			close $rfh;		
 		}
 	}
+	else {
+		if ( $fsize < $readSize ) {
+			print "Writing the entire file [ $fname ] \n";
+			open my $wfh,'+<:encoding(utf8)',$fname or die "File open [ $fname ] failed : $! \n";
+			binmode($wfh);
+			my $i=0;
+			while ($i <= $fsize ) {
+				print $wfh chr(int(rand(256)));
+				$i++;
+			}
+			close $wfh;
+		}
+		else {
+			$start_offset = int rand($fize-$randSize);
+			print "Writing to file [ $fname ] from offset [ $start_offset ] read size [ $readSize ] \n";
+			open my $wfh, '+<:encoding(utf8)',$fname or die "File open [ $fname ] failed : $! \n";
+			binmode($wfh);
+			seek($wfh,$start_offset,0);
+			my $i=0;
+			while ( $i <= $readSize ) {
+				print $wfh chr(int(rand(256)));
+				$i++;
+			}
+			close $wfh;
+		}
+	}
 }
 
